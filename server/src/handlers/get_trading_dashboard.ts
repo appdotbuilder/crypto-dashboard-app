@@ -1,86 +1,100 @@
+import { db } from '../db';
+import { 
+  portfolioTable, 
+  transactionsTable, 
+  cryptoAssetsTable,
+  usersTable 
+} from '../db/schema';
 import { type TradingDashboard } from '../schema';
+import { eq, desc, and } from 'drizzle-orm';
 
 export const getTradingDashboard = async (userId: number): Promise<TradingDashboard> => {
-    // This is a placeholder declaration! Real code should be implemented here.
-    // The goal of this handler is to aggregate all trading data for the dashboard:
-    // - Total portfolio value and P&L
-    // - Top/worst performing assets
-    // - Recent transactions
-    // - Portfolio breakdown
-    // - User's watchlist
-    // This would typically involve multiple database queries and calculations.
-    
-    return Promise.resolve({
-        user_id: userId,
-        total_portfolio_value: 8812.90, // Sum of all portfolio current values
-        total_profit_loss: 137.37, // Sum of all P&L
-        total_profit_loss_percentage: 1.58, // Overall P&L percentage
-        top_performing_asset: 'BNB', // Asset with highest P&L percentage
-        worst_performing_asset: 'ETH', // Asset with lowest P&L percentage
-        recent_transactions: [
-            {
-                id: 1,
-                user_id: userId,
-                wallet_id: 1,
-                transaction_type: 'BUY' as const,
-                asset_symbol: 'BTC',
-                amount: 0.01,
-                price_per_unit: 43000.00,
-                total_value: 430.43,
-                fee: 0.43,
-                status: 'COMPLETED' as const,
-                transaction_hash: '0xabc123...',
-                created_at: new Date(Date.now() - 1000 * 60 * 60),
-                completed_at: new Date(Date.now() - 1000 * 60 * 59)
-            }
-        ],
-        portfolio_breakdown: [
-            {
-                id: 1,
-                user_id: userId,
-                asset_symbol: 'BTC',
-                amount: 0.05432,
-                average_buy_price: 41000.00,
-                current_value: 2347.84,
-                profit_loss: 122.31,
-                profit_loss_percentage: 5.49,
-                last_updated: new Date()
-            },
-            {
-                id: 2,
-                user_id: userId,
-                asset_symbol: 'ETH',
-                amount: 1.25,
-                average_buy_price: 2800.00,
-                current_value: 3313.06,
-                profit_loss: -186.94,
-                profit_loss_percentage: -5.34,
-                last_updated: new Date()
-            }
-        ],
-        watchlist: [
-            {
-                id: 1,
-                symbol: 'BTC',
-                name: 'Bitcoin',
-                current_price: 43250.80,
-                price_change_24h: 1250.30,
-                price_change_percentage_24h: 2.98,
-                market_cap: 847000000000,
-                volume_24h: 28500000000,
-                last_updated: new Date()
-            },
-            {
-                id: 2,
-                symbol: 'ETH',
-                name: 'Ethereum',
-                current_price: 2650.45,
-                price_change_24h: -125.80,
-                price_change_percentage_24h: -4.53,
-                market_cap: 318000000000,
-                volume_24h: 15800000000,
-                last_updated: new Date()
-            }
-        ]
-    });
+  try {
+    // Verify user exists
+    const user = await db.select()
+      .from(usersTable)
+      .where(eq(usersTable.id, userId))
+      .execute();
+
+    if (user.length === 0) {
+      throw new Error('User not found');
+    }
+
+    // Get user's portfolio breakdown
+    const portfolioBreakdown = await db.select()
+      .from(portfolioTable)
+      .where(eq(portfolioTable.user_id, userId))
+      .execute();
+
+    // Convert numeric fields to numbers
+    const portfolioData = portfolioBreakdown.map(item => ({
+      ...item,
+      amount: parseFloat(item.amount),
+      average_buy_price: parseFloat(item.average_buy_price),
+      current_value: parseFloat(item.current_value),
+      profit_loss: parseFloat(item.profit_loss),
+      profit_loss_percentage: parseFloat(item.profit_loss_percentage)
+    }));
+
+    // Calculate total portfolio metrics
+    const totalPortfolioValue = portfolioData.reduce((sum, item) => sum + item.current_value, 0);
+    const totalProfitLoss = portfolioData.reduce((sum, item) => sum + item.profit_loss, 0);
+    const totalInvestment = totalPortfolioValue - totalProfitLoss;
+    const totalProfitLossPercentage = totalInvestment !== 0 ? (totalProfitLoss / totalInvestment) * 100 : 0;
+
+    // Find top and worst performing assets
+    const sortedByPerformance = [...portfolioData].sort((a, b) => b.profit_loss_percentage - a.profit_loss_percentage);
+    const topPerformingAsset = sortedByPerformance.length > 0 ? sortedByPerformance[0].asset_symbol : null;
+    const worstPerformingAsset = sortedByPerformance.length > 0 ? sortedByPerformance[sortedByPerformance.length - 1].asset_symbol : null;
+
+    // Get recent transactions (last 10)
+    const recentTransactionsQuery = await db.select()
+      .from(transactionsTable)
+      .where(eq(transactionsTable.user_id, userId))
+      .orderBy(desc(transactionsTable.created_at))
+      .limit(10)
+      .execute();
+
+    // Convert numeric fields for transactions
+    const recentTransactions = recentTransactionsQuery.map(transaction => ({
+      ...transaction,
+      amount: parseFloat(transaction.amount),
+      price_per_unit: parseFloat(transaction.price_per_unit),
+      total_value: parseFloat(transaction.total_value),
+      fee: parseFloat(transaction.fee)
+    }));
+
+    // Get watchlist (all crypto assets for now - in a real app, this would be user-specific)
+    const watchlistQuery = await db.select()
+      .from(cryptoAssetsTable)
+      .orderBy(desc(cryptoAssetsTable.market_cap))
+      .limit(10)
+      .execute();
+
+    // Convert numeric fields for watchlist
+    const watchlist = watchlistQuery.map(asset => ({
+      ...asset,
+      current_price: parseFloat(asset.current_price),
+      price_change_24h: parseFloat(asset.price_change_24h),
+      price_change_percentage_24h: parseFloat(asset.price_change_percentage_24h),
+      market_cap: parseFloat(asset.market_cap),
+      volume_24h: parseFloat(asset.volume_24h)
+    }));
+
+    return {
+      user_id: userId,
+      total_portfolio_value: Math.round(totalPortfolioValue * 100) / 100,
+      total_profit_loss: Math.round(totalProfitLoss * 100) / 100,
+      total_profit_loss_percentage: Math.round(totalProfitLossPercentage * 100) / 100,
+      top_performing_asset: topPerformingAsset,
+      worst_performing_asset: worstPerformingAsset,
+      recent_transactions: recentTransactions,
+      portfolio_breakdown: portfolioData,
+      watchlist: watchlist
+    };
+
+  } catch (error) {
+    console.error('Trading dashboard fetch failed:', error);
+    throw error;
+  }
 };
